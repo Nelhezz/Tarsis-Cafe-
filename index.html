@@ -50,7 +50,6 @@ a { color: inherit; }
 .grain {
   position: fixed; inset: -50%; z-index: 50; pointer-events: none; opacity: .06;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  animation: grain 1s steps(6) infinite;
 }
 @keyframes grain { 0%{transform:translate(0,0)} 33%{transform:translate(-3%,2%)} 66%{transform:translate(2%,-3%)} 100%{transform:translate(0,0)} }
 
@@ -204,8 +203,7 @@ main { position: relative; z-index: 2; }
 .book-lead { margin: 20px 0 0; max-width: 38ch; color: rgba(244, 233, 220, .82); }
 .book-form {
   display: grid; gap: 16px; padding: 28px; border-radius: 22px;
-  background: rgba(20, 11, 19, .55); border: 1px solid var(--line);
-  backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  background: rgba(20, 11, 19, .82); border: 1px solid var(--line);
 }
 .field { display: grid; gap: 6px; min-width: 0; }
 .field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
@@ -582,7 +580,8 @@ main { position: relative; z-index: 2; }
     if (!window.THREE) throw new Error('three.js did not load');
     const canvas = document.getElementById('gl');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    const PR = Math.min(devicePixelRatio || 1, 1.75);
+    // Retina screens get 1.5x, not 2x: almost the same sharpness, ~45% fewer pixels to shade
+    const PR = Math.min(devicePixelRatio || 1, 1.5);
     renderer.setPixelRatio(PR);
     renderer.setSize(innerWidth, innerHeight, false);
     renderer.setClearColor(0x140b13, 1);
@@ -591,6 +590,7 @@ main { position: relative; z-index: 2; }
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.autoUpdate = false;   // only the cup casts shadows; refreshed while it is on screen
     const lin = hex => new THREE.Color(hex).convertSRGBToLinear();
 
     const scene = new THREE.Scene();
@@ -622,7 +622,7 @@ main { position: relative; z-index: 2; }
         vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0); m=m*m;
         return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
       }
-      float fbm(vec3 p){ float a=0.5, s=0.0; for(int i=0;i<5;i++){ s+=a*snoise(p); p*=2.03; a*=0.5; } return s; }
+      float fbm(vec3 p){ float a=0.5, s=0.0; for(int i=0;i<3;i++){ s+=a*snoise(p); p*=2.03; a*=0.5; } return s; }
     `;
 
     /* ===== Mars: real colour map, relief from the map, thin dusty atmosphere ===== */
@@ -657,15 +657,18 @@ main { position: relative; z-index: 2; }
           varying vec2 vUv; varying vec3 vN; varying vec3 vEast; varying vec3 vNorth; varying vec3 vWorld;
           float lum(vec2 uv){ return dot(texture2D(uMap, uv).rgb, vec3(0.3, 0.59, 0.11)); }
           void main(){
-            vec3 albedo = pow(texture2D(uMap, vUv).rgb, vec3(2.2));
+            vec3 tex0 = texture2D(uMap, vUv).rgb;
+            vec3 albedo = pow(tex0, vec3(2.2));
             float g = dot(albedo, vec3(0.3, 0.59, 0.11));
             albedo = mix(vec3(g), albedo, 0.78) * vec3(1.04, 0.96, 0.88);   // calm the source saturation toward real Mars
             albedo = mix(vec3(0.03, 0.02, 0.02), albedo, uReady);
 
             // relief: brightness of the map stands in for height, so craters and canyons catch the low sun
             vec2 e = uTexel * 1.5;
-            float hx = lum(vUv + vec2(e.x, 0.0)) - lum(vUv - vec2(e.x, 0.0));
-            float hy = lum(vUv + vec2(0.0, e.y)) - lum(vUv - vec2(0.0, e.y));
+            // one-sided differences: 3 texture reads per pixel instead of 5
+            float h0 = dot(tex0, vec3(0.3, 0.59, 0.11));
+            float hx = (lum(vUv + vec2(e.x, 0.0)) - h0) * 2.0;
+            float hy = (lum(vUv + vec2(0.0, e.y)) - h0) * 2.0;
             vec3 Ng = normalize(vN);
             vec3 N = normalize(Ng - 2.2 * uReady * (hx * normalize(vEast) + hy * normalize(vNorth)));
             vec3 V = normalize(cameraPosition - vWorld);
@@ -811,7 +814,7 @@ main { position: relative; z-index: 2; }
     cupInner.add(saucer);
 
     // coffee surface: a painted crema texture, wet clearcoat, and the same texture as a bump map so foam stands proud
-    const S = 1024, C = S / 2;
+    const S = 768, C = S / 2;
     const crema = document.createElement('canvas'); crema.width = crema.height = S;
     const g = crema.getContext('2d');
     const cremaTex = new THREE.CanvasTexture(crema);
@@ -994,12 +997,28 @@ main { position: relative; z-index: 2; }
     const sceneEls = [...document.querySelectorAll('[data-scene]')];
     const cur = { ...frames.hero() };
     const smooth = t => t * t * (3 - 2 * t);
+    // Section positions are measured once (and on resize / ScrollTrigger refresh), not every frame:
+    // reading layout each frame forced the browser to re-lay out the page. A pinned section is measured
+    // by its pin spacer, so it keeps its keyframe for the whole pin.
+    let sceneBoxes = [];
+    function measureScenes() {
+      const y = lenis ? lenis.scroll : scrollY;
+      sceneBoxes = sceneEls.map(el => {
+        const box = el.parentElement && el.parentElement.classList.contains('pin-spacer') ? el.parentElement : el;
+        const r = box.getBoundingClientRect();
+        return { top: r.top + y, h: r.height, f: frames[el.dataset.scene] };
+      });
+    }
+    measureScenes();
+    addEventListener('resize', measureScenes);
+    if (window.ScrollTrigger) ScrollTrigger.addEventListener('refresh', measureScenes);
+    if (document.fonts) document.fonts.ready.then(measureScenes);
     // Each section holds its keyframe while it covers the viewport centre (minus half a screen at each end); between, keyframes blend.
     function targetState() {
-      const vc = innerHeight / 2;
-      const pts = sceneEls.map(el => {
-        const r = el.getBoundingClientRect(), m = Math.min(r.height / 2, innerHeight * 0.5);
-        return { lo: r.top + m, hi: r.bottom - m, f: frames[el.dataset.scene]() };
+      const vc = innerHeight / 2, y = lenis ? lenis.scroll : scrollY;
+      const pts = sceneBoxes.map(s => {
+        const top = s.top - y, m = Math.min(s.h / 2, innerHeight * 0.5);
+        return { lo: top + m, hi: top + s.h - m, f: s.f() };
       });
       let a = pts[0], b = pts[0], t = 0;
       if (vc >= pts[pts.length - 1].lo) { a = b = pts[pts.length - 1]; }
@@ -1014,16 +1033,38 @@ main { position: relative; z-index: 2; }
       return out;
     }
 
-    let spinVel = 0, flash = 0;
+    let spinVel = 0, flash = 0, frameN = 0;
     const clock = new THREE.Clock();
-    const qTmp = new THREE.Quaternion();
     let visible = true;
-    document.addEventListener('visibilitychange', () => { visible = !document.hidden; });
+    document.addEventListener('visibilitychange', () => { visible = !document.hidden; frameTimes.length = 0; });
+
+    // Adaptive resolution: if frames run slow, render a little smaller; scale back up when there is headroom
+    let quality = 1, lastQualityChange = 0;
+    const frameTimes = [];
+    function adaptQuality(raw) {
+      if (raw > 0.25) return;
+      frameTimes.push(raw);
+      if (frameTimes.length < 40) return;
+      const avg = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+      frameTimes.length = 0;
+      const now = performance.now();
+      if (now - lastQualityChange < 1500) return;
+      let next = quality;
+      if (avg > 1 / 45 && quality > 0.55) next = Math.max(0.55, quality - 0.15);
+      else if (avg < 1 / 58 && quality < 1) next = Math.min(1, quality + 0.05);
+      if (next !== quality) {
+        quality = next; lastQualityChange = now;
+        renderer.setPixelRatio(PR * quality);
+        renderer.setSize(innerWidth, innerHeight, false);
+      }
+    }
 
     function frame() {
       requestAnimationFrame(frame);
       if (!visible) return;
-      const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+      const raw = clock.getDelta(), dt = Math.min(raw, 0.05), t = clock.elapsedTime;
+      adaptQuality(raw);
+      frameN++;
       const k = 1 - Math.pow(0.0015, dt);
       const tgt = targetState();
       for (const key in tgt) cur[key] += (tgt[key] - cur[key]) * k;
@@ -1041,6 +1082,9 @@ main { position: relative; z-index: 2; }
 
       cup.position.set(cur.cx, cur.cy, 0.5);
       cup.scale.setScalar(cur.cs);
+      // the cup (with its steam and shadow) costs nothing while it is off screen
+      cup.visible = Math.abs(cur.cx) < halfW() + 1.5 * cur.cs;
+      if (cup.visible && frameN % 2 === 0) renderer.shadowMap.needsUpdate = true;
       spinVel *= 0.94;
       cupInner.rotation.y += dt * (0.25 + spinVel);
       cup.rotation.x = 0.55 + mouse.ny * 0.15;
@@ -1079,7 +1123,11 @@ main { position: relative; z-index: 2; }
   }
 
   /* ---------- Per-frame UI: cursor, hero weights, marquee, nav ---------- */
-  let wavePhase = 0;
+  let wavePhase = 0, marqueeHalf = 0;
+  const measureMarquee = () => { marqueeHalf = marquee.scrollWidth / 2; };
+  measureMarquee();
+  addEventListener('resize', measureMarquee);
+  if (document.fonts) document.fonts.ready.then(measureMarquee);
   function ui() {
     requestAnimationFrame(ui);
     if (finePointer && !reduce) {
@@ -1087,11 +1135,14 @@ main { position: relative; z-index: 2; }
       cDot.style.transform = `translate3d(${mouse.x - 3}px, ${mouse.y - 3}px, 0)`;
       cRing.style.transform = `translate3d(${ring.x}px, ${ring.y}px, 0) translate(-50%, -50%)`;
     }
-    const hr = title.getBoundingClientRect();
-    if (hr.bottom > 0 && !reduce) {
+    const y = lenis ? lenis.scroll : scrollY;
+    // hero letters: read every position first, then write every weight, so the browser lays out once;
+    // letters that already sit at their target weight are not touched at all
+    if (y < innerHeight * 1.2 && !reduce) {
       wavePhase += 0.025;
+      const rects = letters.map(l => l.outer.getBoundingClientRect());
       letters.forEach((l, i) => {
-        const r = l.outer.getBoundingClientRect();
+        const r = rects[i];
         let target;
         if (finePointer && mouse.active) {
           const d = Math.hypot(mouse.x - (r.left + r.width / 2), mouse.y - (r.top + r.height / 2));
@@ -1100,12 +1151,12 @@ main { position: relative; z-index: 2; }
           target = 450 + 400 * Math.sin(wavePhase - i * 0.6);
         }
         l.w += (target - l.w) * 0.12;
-        l.inner.style.fontVariationSettings = `"wght" ${l.w.toFixed(0)}`;
+        const w = Math.round(l.w);
+        if (w !== l.shown) { l.shown = w; l.inner.style.fontVariationSettings = `"wght" ${w}`; }
       });
     }
-    const y = lenis ? lenis.scroll : scrollY;
     vel += ((y - lastY) - vel) * 0.2; lastY = y;
-    const half = marquee.scrollWidth / 2;
+    const half = marqueeHalf;
     mqX -= (reduce ? 0 : 1.2) + Math.abs(vel) * 0.6;
     if (half > 0 && -mqX > half) mqX += half;
     mqSkew += (Math.max(-12, Math.min(12, -vel * 0.4)) - mqSkew) * 0.1;
